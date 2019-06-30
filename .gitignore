@@ -1,0 +1,7 @@
+/Debug/
+/.*.cmd
+
+**/dsc_keybus_master.mod
+**/dsc_keybus_master.mod.o
+**/dsc_keybus_master.ko
+**/dsc_keybus_master.o
