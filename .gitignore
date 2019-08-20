@@ -6,6 +6,8 @@
 **/dsc_keybus_master.ko
 **/dsc_keybus_master.o
 
-.vscode
 dsc_keybus_master.mod.c
 modules.order
+
+.vscode
+.directory

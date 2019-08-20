@@ -50,15 +50,15 @@ static struct dsc_dev dsc_txt = {
 	.binary = false,
 	.name = "dsc_txt"
 };
-static struct dsc_dev dsc_bin = {
-	.binary = true,
-	.name = "dsc_bin"
-};
+// static struct dsc_dev dsc_bin = {
+// 	.binary = true,
+// 	.name = "dsc_bin"
+// };
 
-static struct dsc_dev * dsc_devs[] = {
-	&dsc_txt,
-	&dsc_bin
-};
+// static struct dsc_dev * dsc_devs[] = {
+// 	&dsc_txt,
+// 	&dsc_bin
+// };
 
 int dsc_dev_init(struct dsc_dev *device, int index);
 void dsc_dev_destroy(struct dsc_dev *device);
@@ -109,7 +109,7 @@ static int __init dsc_keybus_mod_init(void) {
 	INIT_KFIFO(dsc_write_fifo);
 
 	dsc_dev_init(&dsc_txt, 0);
-    dsc_dev_init(&dsc_bin, 1);
+    // dsc_dev_init(&dsc_bin, 1);
 
 	pr_info(LOG_FORMAT, "initialized module");
 	return 0;
@@ -127,8 +127,8 @@ static void __exit dsc_keybus_mod_exit(void) {
 
 	dsc_dev_destroy(&dsc_txt);
 	pr_info(LOG_FORMAT, "destroyed txt");
-   	dsc_dev_destroy(&dsc_bin);
-	pr_info(LOG_FORMAT, "destroyed bin");
+   	// dsc_dev_destroy(&dsc_bin);
+	// pr_info(LOG_FORMAT, "destroyed bin");
 
 	pr_info(LOG_FORMAT, "exited");
 }
