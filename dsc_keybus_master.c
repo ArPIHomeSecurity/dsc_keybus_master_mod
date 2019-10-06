@@ -60,7 +60,7 @@ static struct gpio keybus[] = {
     {0, GPIOF_OUT_INIT_HIGH, "DSC DATA"}, // KeyBus Data
 };
 
-#define CMD_STATUS 0x05
+#define CMD_STATUS 0x105
 
 // static struct dsc_dev dsc_bin = {
 // 	.binary = true,
@@ -95,20 +95,20 @@ static enum hrtimer_restart communicate(struct hrtimer *timer)
     // pr_info(LOG_FORMAT, "Start communication");
 
     int i;
-    for (i = 7; i >= 0; --i)
+    for (i = 8; i >= 0; --i)
     {
         gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
         udelay(500);
-        // read status
 
         // write command
         gpio_direction_output(keybus[DSC_CLOCK].gpio, 0);
-        udelay(6);
+        gpio_direction_output(keybus[DSC_DATA].gpio, 1);
+        udelay(450);
         int bit = (CMD_STATUS >> i) & 0x01;
         // pr_info(LOG_FORMAT_1D, "Sending index", i);
         pr_info(LOG_FORMAT_1D, "Sending value", bit);
         gpio_direction_output(keybus[DSC_DATA].gpio, bit);
-        udelay(500);
+        udelay(50);
     }
 
     gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
