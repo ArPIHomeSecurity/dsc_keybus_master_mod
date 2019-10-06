@@ -9,7 +9,7 @@ from gpiozero import Button
 clock = LED(5)
 data = LED(0)
 
-status = [0,0,0,0, 0,1,0,1]
+status = [1, 0,0,0,0, 0,1,0,1]
 
 data.on()
 clock.on()
@@ -33,16 +33,16 @@ while True:
         clock.on()
         data.on()
 
-        sleep(1)
-        continue
+        #sleep(1)
+        #continue
         # check keypad response
         data.close()
         data = Button(0)
         sleep(0.0005)
-        #clock.off()
-        key_response = 0 # data.value
-        #print("%s" % key_response)
-        #clock.on()
+        clock.off()
+        key_response = data.value
+        print("%s" % key_response)
+        clock.on()
 
         data.when_pressed = lambda _ : print("PRESSEDDD")
         if not key_response:
@@ -54,7 +54,9 @@ while True:
                 sleep(0.0005)
 
         data.close()
-        data = LED(0)
+        data = LED(0, initial_value=True)
+        data.on()
+        clock.on()
         print("")
         sleep(1)
 
