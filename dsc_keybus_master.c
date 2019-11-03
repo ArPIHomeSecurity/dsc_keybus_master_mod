@@ -23,11 +23,12 @@
 
 #define LOG_FORMAT "DSC keybus: %s\n"
 #define LOG_FORMAT_1D "DSC keybus: %s => %d\n"
+#define LOG_FORMAT_1H "DSC keybus: %s => %#04X\n"
 
 unsigned long timer_interval_ns = 1e9L;
 static int dsc_major;
 static struct hrtimer blink_timer;
-static bool dev_open = false;
+static short int dev_open = false;
 
 static DECLARE_KFIFO(dsc_write_fifo, char, FIFO_SIZE);
 
@@ -60,7 +61,7 @@ static struct gpio keybus[] = {
     {0, GPIOF_OUT_INIT_HIGH, "DSC DATA"}, // KeyBus Data
 };
 
-#define CMD_STATUS 0x105
+#define CMD_STATUS 0x05
 
 // static struct dsc_dev dsc_bin = {
 // 	.binary = true,
@@ -84,32 +85,89 @@ static struct file_operations file_operations = {
     .write = dsc_write,
     .open = dsc_dev_open,
     .release = dsc_dev_close,
-    .owner = THIS_MODULE};
+    .owner = THIS_MODULE
+};
+
+
+void write_bit(bool bit) {
+    // write command
+    gpio_direction_output(keybus[DSC_CLOCK].gpio, 0);
+    udelay(20);
+    gpio_direction_output(keybus[DSC_DATA].gpio, 1);
+    udelay(430);
+    pr_info(LOG_FORMAT_1D, "Sending value", bit);
+    gpio_direction_output(keybus[DSC_DATA].gpio, bit);
+    udelay(60);
+    gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
+    udelay(490);
+}
+
+void write_byte(short int byte) {
+    int i;
+    for (i = 7; i >= 0; --i)
+    {
+        // pr_info(LOG_FORMAT_1D, "Sending index", i);
+        write_bit((byte >> i) & 0x01);
+    }
+}
+
+bool read_bit(void) {
+    short int bit = 0;
+    gpio_direction_input(keybus[DSC_DATA].gpio);
+
+    // gpio_direction_output(keybus[DSC_CLOCK].gpio, 0);
+    // udelay(200);
+    // bit = gpio_get_value(keybus[DSC_DATA].gpio);
+    // pr_info(LOG_FORMAT_1D, "Reading value =", bit);
+    // udelay(300);
+    // gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
+    // udelay(500);
+    gpio_direction_output(keybus[DSC_CLOCK].gpio, 0);
+    udelay(200);
+    bit = gpio_get_value(keybus[DSC_DATA].gpio);
+    pr_info(LOG_FORMAT_1D, "Reading value =", bit);
+    udelay(300);
+    gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
+    udelay(500);
+
+    return bit;
+}
 
 /*
  * Periodically called function.
  */
 static enum hrtimer_restart communicate(struct hrtimer *timer)
 {
+    int response = 0;
     ktime_t currtime, interval;
     // pr_info(LOG_FORMAT, "Start communication");
 
-    int i;
-    for (i = 8; i >= 0; --i)
-    {
-        gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
-        udelay(500);
+    gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
+    gpio_direction_output(keybus[DSC_DATA].gpio, 1);
 
-        // write command
-        gpio_direction_output(keybus[DSC_CLOCK].gpio, 0);
-        gpio_direction_output(keybus[DSC_DATA].gpio, 1);
-        udelay(450);
-        int bit = (CMD_STATUS >> i) & 0x01;
-        // pr_info(LOG_FORMAT_1D, "Sending index", i);
-        pr_info(LOG_FORMAT_1D, "Sending value", bit);
-        gpio_direction_output(keybus[DSC_DATA].gpio, bit);
-        udelay(50);
+    pr_info(LOG_FORMAT_1D, "Send command", CMD_STATUS);
+    write_byte(CMD_STATUS);
+
+    // udelay(1000);
+    read_bit();
+
+    if (read_bit() == 0) {
+        int i;
+        for (i = 0; i < 8; ++i) {
+            response = (response << 1) | read_bit();
+        }
+
+        pr_info(LOG_FORMAT_1H, "Received response = ", response);
     }
+    else {
+        pr_info(LOG_FORMAT, "No response received");
+    }
+
+
+    udelay(2000);
+    // write_byte(0x27);
+
+    // write_byte(0xFF);
 
     gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
     gpio_direction_output(keybus[DSC_DATA].gpio, 1);
@@ -118,10 +176,11 @@ static enum hrtimer_restart communicate(struct hrtimer *timer)
 	interval = ktime_set(0,timer_interval_ns);
 	hrtimer_forward(timer, currtime , interval);
 
-    // pr_info(LOG_FORMAT, "End communication");
+    pr_info(LOG_FORMAT, "End communication");
     // pr_info(LOG_FORMAT, "Command sent");
     return HRTIMER_RESTART;
 }
+
 
 /*
  * Module init function
@@ -293,7 +352,7 @@ static int dsc_dev_open(struct inode *inode, struct file *pfile)
 {
     struct dsc_dev *dev;
     pr_info(LOG_FORMAT, "Opening device");
-    if (dev_open)
+    if (dev_open > 0)
         return -EBUSY;
     dev = container_of(inode->i_cdev, struct dsc_dev, cdev);
     dev->open = true;
