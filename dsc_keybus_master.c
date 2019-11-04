@@ -22,8 +22,8 @@
 #define BUF_LEN 1024
 
 #define LOG_FORMAT "DSC keybus: %s\n"
-#define LOG_FORMAT_1D "DSC keybus: %s => %d\n"
-#define LOG_FORMAT_1H "DSC keybus: %s => %#04X\n"
+#define LOG_FORMAT_1D "DSC keybus: %s %d\n"
+#define LOG_FORMAT_1H "DSC keybus: %s 0x%02X\n"
 
 unsigned long timer_interval_ns = 1e9L;
 static int dsc_major;
@@ -92,40 +92,66 @@ static struct file_operations file_operations = {
 void write_bit(bool bit) {
     // write command
     gpio_direction_output(keybus[DSC_CLOCK].gpio, 0);
-    udelay(20);
     gpio_direction_output(keybus[DSC_DATA].gpio, 1);
-    udelay(430);
-    pr_info(LOG_FORMAT_1D, "Sending value", bit);
+    udelay(480);
+    pr_info(LOG_FORMAT_1D, "Sending value = ", bit);
     gpio_direction_output(keybus[DSC_DATA].gpio, bit);
-    udelay(60);
+    udelay(20);
     gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
-    udelay(490);
+    udelay(500);
+    gpio_direction_output(keybus[DSC_DATA].gpio, 1);
+}
+
+bool write_read_bit(bool bit) {
+    bool response_bit = 0;
+    // write command
+    gpio_direction_input(keybus[DSC_DATA].gpio);
+    gpio_direction_output(keybus[DSC_CLOCK].gpio, 0);
+    udelay(200);
+    response_bit = gpio_get_value(keybus[DSC_DATA].gpio);
+    pr_info(LOG_FORMAT_1D, "Reading value <====", bit);
+    udelay(280);
+    pr_info(LOG_FORMAT_1D, "Sending value =>", bit);
+    gpio_direction_output(keybus[DSC_DATA].gpio, bit);
+    udelay(20);
+    gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
+    udelay(500);
+    gpio_direction_output(keybus[DSC_DATA].gpio, 1);
+
+    return response_bit;
 }
 
 void write_byte(short int byte) {
     int i;
     for (i = 7; i >= 0; --i)
     {
-        // pr_info(LOG_FORMAT_1D, "Sending index", i);
+        // pr_info(LOG_FORMAT_1D, "Sending index =", i);
         write_bit((byte >> i) & 0x01);
     }
 }
 
+short int write_read_byte(short int byte) {
+    pr_info(LOG_FORMAT_1H, "Sending data =", byte);
+    short int i;
+    short int response = 0;
+    for (i = 7; i >= 0; --i)
+    {
+        // pr_info(LOG_FORMAT_1D, "Sending index =", i);
+        response = (response << 1) | write_read_bit((byte >> i) & 0x01);
+    }
+
+    pr_info(LOG_FORMAT_1H, "Received response =", response);
+    return response;
+}
+
 bool read_bit(void) {
-    short int bit = 0;
+    bool bit = 0;
     gpio_direction_input(keybus[DSC_DATA].gpio);
 
-    // gpio_direction_output(keybus[DSC_CLOCK].gpio, 0);
-    // udelay(200);
-    // bit = gpio_get_value(keybus[DSC_DATA].gpio);
-    // pr_info(LOG_FORMAT_1D, "Reading value =", bit);
-    // udelay(300);
-    // gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
-    // udelay(500);
     gpio_direction_output(keybus[DSC_CLOCK].gpio, 0);
     udelay(200);
     bit = gpio_get_value(keybus[DSC_DATA].gpio);
-    pr_info(LOG_FORMAT_1D, "Reading value =", bit);
+    pr_info(LOG_FORMAT_1D, "Reading value <====", bit);
     udelay(300);
     gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
     udelay(500);
@@ -145,24 +171,31 @@ static enum hrtimer_restart communicate(struct hrtimer *timer)
     gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
     gpio_direction_output(keybus[DSC_DATA].gpio, 1);
 
-    pr_info(LOG_FORMAT_1D, "Send command", CMD_STATUS);
+    pr_info(LOG_FORMAT_1H, "Send command =", CMD_STATUS);
     write_byte(CMD_STATUS);
 
-    // udelay(1000);
+    udelay(2000);
+    pr_info(LOG_FORMAT, "Read hack");
     read_bit();
 
+    udelay(2000);
+    pr_info(LOG_FORMAT, "Test read");
     if (read_bit() == 0) {
-        int i;
-        for (i = 0; i < 8; ++i) {
-            response = (response << 1) | read_bit();
-        }
+        udelay(2000);
+        response = write_read_byte(0x80);
 
-        pr_info(LOG_FORMAT_1H, "Received response = ", response);
+        udelay(2000);
+        response = write_read_byte(0x01);
+
+        udelay(2000);
+        response = write_read_byte(0xC7);
+
+        udelay(2000);
+        response = write_read_byte(0x91);
     }
     else {
         pr_info(LOG_FORMAT, "No response received");
     }
-
 
     udelay(2000);
     // write_byte(0x27);
