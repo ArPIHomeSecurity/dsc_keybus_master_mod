@@ -11,3 +11,8 @@ modules.order
 
 .vscode
 .directory
+
+build
+dist
+
+**/*.pyo

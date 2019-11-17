@@ -61,7 +61,8 @@ static struct gpio keybus[] = {
     {0, GPIOF_OUT_INIT_HIGH, "DSC DATA"}, // KeyBus Data
 };
 
-#define CMD_STATUS 0x05
+#define CMD_PARTITION_STATUS 0x05
+#define CMD_ZONE_STATUS 0x27
 
 // static struct dsc_dev dsc_bin = {
 // 	.binary = true,
@@ -137,7 +138,7 @@ short int write_read_byte(short int byte) {
     for (i = 7; i >= 0; --i)
     {
         // pr_info(LOG_FORMAT_1D, "Sending index =", i);
-        response = (response << 1) | write_read_bit((byte >> i) & 0x01);
+        response = response | (write_read_bit((byte >> i) & 0x01) << i);
     }
 
     pr_info(LOG_FORMAT_1H, "Received response =", response);
@@ -159,20 +160,11 @@ bool read_bit(void) {
     return bit;
 }
 
-/*
- * Periodically called function.
- */
-static enum hrtimer_restart communicate(struct hrtimer *timer)
-{
+void send_partition_status(void) {
     int response = 0;
-    ktime_t currtime, interval;
-    // pr_info(LOG_FORMAT, "Start communication");
 
-    gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
-    gpio_direction_output(keybus[DSC_DATA].gpio, 1);
-
-    pr_info(LOG_FORMAT_1H, "Send command =", CMD_STATUS);
-    write_byte(CMD_STATUS);
+    pr_info(LOG_FORMAT_1H, "Send command =", CMD_PARTITION_STATUS);
+    write_byte(CMD_PARTITION_STATUS);
 
     udelay(2000);
     pr_info(LOG_FORMAT, "Read hack");
@@ -182,7 +174,7 @@ static enum hrtimer_restart communicate(struct hrtimer *timer)
     pr_info(LOG_FORMAT, "Test read");
     if (read_bit() == 0) {
         udelay(2000);
-        response = write_read_byte(0x80);
+        response = write_read_byte(0x81);
 
         udelay(2000);
         response = write_read_byte(0x01);
@@ -196,11 +188,51 @@ static enum hrtimer_restart communicate(struct hrtimer *timer)
     else {
         pr_info(LOG_FORMAT, "No response received");
     }
+}
+
+void send_zone_status(void) {
+    int response = 0;
+
+    pr_info(LOG_FORMAT_1H, "Send command =", CMD_ZONE_STATUS);
+    write_byte(CMD_ZONE_STATUS);
 
     udelay(2000);
-    // write_byte(0x27);
+    pr_info(LOG_FORMAT, "Read hack");
+    read_bit();
 
-    // write_byte(0xFF);
+    udelay(2000);
+    pr_info(LOG_FORMAT, "Test read");
+    if (read_bit() == 0) {
+        udelay(2000);
+        response = write_read_byte(0x81);
+
+        udelay(2000);
+        response = write_read_byte(0x01);
+
+        udelay(2000);
+        response = write_read_byte(0xC7);
+
+        udelay(2000);
+        response = write_read_byte(0xFF);
+    }
+    else {
+        pr_info(LOG_FORMAT, "No response received");
+    }
+}
+
+/*
+ * Periodically called function.
+ */
+static enum hrtimer_restart communicate(struct hrtimer *timer)
+{
+    ktime_t currtime, interval;
+    // pr_info(LOG_FORMAT, "Start communication");
+
+    gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
+    gpio_direction_output(keybus[DSC_DATA].gpio, 1);
+
+    send_partition_status();
+    udelay(2000);
 
     gpio_direction_output(keybus[DSC_CLOCK].gpio, 1);
     gpio_direction_output(keybus[DSC_DATA].gpio, 1);
