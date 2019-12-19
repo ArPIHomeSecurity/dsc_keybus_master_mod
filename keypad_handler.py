@@ -3,18 +3,23 @@
 import logging
 from logging import basicConfig
 from multiprocessing import Process
-from queue import Queue, Empty
+from queue import Empty, Queue
 from time import sleep
 
 import RPi.GPIO as GPIO
 
+BYTE_GAP = 0.001
+
+# Magic numbers
 COMMAND_0x81 = 0b10000001
 COMMAND_0x01 = 0b00000001
 UNKNOW_DATA = 0b10010001  # 0x91
-PARTITION_DISABLED = 0b11000111
+PARTITION_DISABLED = 0b11000111  # 0xC7
 
+# COMMANDS
 PARTITION_STATUS = 0x05
 ZONE_STATUS      = 0x27
+ZONE_LIGHTS      = 0x0A
 
 
 def usleep(secs):
@@ -28,14 +33,15 @@ PROGRAM   = 0b00100000 # 0x20
 ERROR     = 0b00010000 # 0x10
 BYPASS    = 0b00001000 # 0x08
 MEMORY    = 0b00000100 # 0x04
-ARMED     = 0b00000010 # 0x02 
+ARMED     = 0b00000010 # 0x02
 READY     = 0b00000001 # 0x01
 
 
 class KeypadHandler(Process):
-    _backlight = True
-    _armed = False
+    _backlight = False
+    _armed = True
     _ready = True
+    _error = True
 
     def __init__(self, commands, responses):
         super(KeypadHandler, self).__init__()
@@ -74,7 +80,10 @@ class KeypadHandler(Process):
             self.send_partition_status()
             self.print_communication()
 
-            # self.send_zone_status()
+            self.send_zone_status()
+            self.print_communication()
+
+            # self.send_zone_lights()
             # self.print_communication()
 
     def receive_bit(self):
@@ -86,7 +95,7 @@ class KeypadHandler(Process):
         GPIO.output(self._data, 1)
         GPIO.output(self._clock, 1)
         sleep(0.000450)
-        
+
         self._communication.append({"sent_b": 0, "received_b": bit})
         return bit
 
@@ -111,40 +120,27 @@ class KeypadHandler(Process):
     def send_partition_status(self):
         print("PARTITION STATUS")
         led_status = self.get_led_status()
-        send = [PARTITION_STATUS, led_status, 0x01, UNKNOW_DATA, PARTITION_DISABLED]
-
-        self.send_receive_byte(send[0])
-        sleep(0.001)
-        self.receive_bit()
-        sleep(0.001)
-        self.send_receive_byte(send[1])
-        sleep(0.001)
-        self.send_receive_byte(send[2])
-        sleep(0.001)
-        self.send_receive_byte(send[3])
-        sleep(0.001)
-        self.send_receive_byte(send[4])
+        self.send_and_receive([PARTITION_STATUS, led_status, 0x01, UNKNOW_DATA, PARTITION_DISABLED])
 
     def send_zone_status(self):
         print("ZONE STATUS")
         led_status = self.get_led_status()
-        send = [ZONE_STATUS, led_status, 0x01, UNKNOW_DATA, PARTITION_DISABLED, 0x00, 0x01]
+        self.send_and_receive(self.add_CRC([ZONE_STATUS, led_status, 0x01, UNKNOW_DATA, 0XFF, 0x00]))
 
-        self.send_receive_byte(send[0])
-        sleep(0.001)
+    def send_zone_lights(self):
+        print("ZONE LIGHTS")
+        led_status = self.get_led_status()
+        self.send_and_receive(self.add_CRC([ZONE_LIGHTS, led_status, 0x01, 0x65, 0x0, 0x0, 0x0, 0x0, 0x0]))
+
+    def send_and_receive(self, messages):
+        self.send_receive_byte(messages.pop(0))
+        sleep(BYTE_GAP)
         self.receive_bit()
-        sleep(0.001)
-        self.send_receive_byte(send[1])
-        sleep(0.001)
-        self.send_receive_byte(send[2])
-        sleep(0.001)
-        self.send_receive_byte(send[3])
-        sleep(0.001)
-        self.send_receive_byte(send[4])
-        sleep(0.001)
-        self.send_receive_byte(send[5])
-        sleep(0.001)
-        self.send_receive_byte(send[6])
+        sleep(BYTE_GAP)
+
+        while messages:
+            self.send_receive_byte(messages.pop(0))
+            sleep(BYTE_GAP)
 
     def get_led_status(self):
         status = 0
@@ -154,8 +150,18 @@ class KeypadHandler(Process):
             status |= ARMED
         if self._ready:
             status |= READY
+        if self._error:
+            status |= ERROR
 
         return status
+
+    def add_CRC(self, messages):
+        total = 0
+        for message in messages:
+            total += message
+
+        messages.append(total % 256)
+        return messages
 
     def print_communication(self):
         sent = ""
@@ -167,9 +173,15 @@ class KeypadHandler(Process):
             elif "sent" in message and "received" in message:
                 sent += " {0:08b}".format(message["sent"])
                 received += " {0:08b}".format(message["received"])
-        
+
         print("Sent:     {}".format(sent))
         print("Received: {}".format(received))
+        try:
+            if self._communication[4]["received"] == 0xFE:
+                print("!!! Unknown command !!!")
+        except KeyError:
+            pass
+
         self._communication = []
 
     def print_columns(self):
