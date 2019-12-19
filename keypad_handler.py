@@ -8,10 +8,13 @@ from time import sleep
 
 import RPi.GPIO as GPIO
 
-COMMAND_0x81 = "10000001"
-COMMAND_0x01 = "00000001"
-COMMAND_0xC7 = "11000111"
-COMMAND_0x91 = "10010001"
+COMMAND_0x81 = 0b10000001
+COMMAND_0x01 = 0b00000001
+UNKNOW_DATA = 0b10010001  # 0x91
+PARTITION_DISABLED = 0b11000111
+
+PARTITION_STATUS = 0x05
+ZONE_STATUS      = 0x27
 
 
 def usleep(secs):
@@ -19,13 +22,18 @@ def usleep(secs):
 
 
 # LEDs
-BACKLIGHT = 0x80
-ARMED = 0x02
-READY = 0x01
+BACKLIGHT = 0b10000000 # 0x80
+FIRE      = 0b01000000 # 0x40
+PROGRAM   = 0b00100000 # 0x20
+ERROR     = 0b00010000 # 0x10
+BYPASS    = 0b00001000 # 0x08
+MEMORY    = 0b00000100 # 0x04
+ARMED     = 0b00000010 # 0x02 
+READY     = 0b00000001 # 0x01
 
 
 class KeypadHandler(Process):
-    _backlight = False
+    _backlight = True
     _armed = False
     _ready = True
 
@@ -66,25 +74,8 @@ class KeypadHandler(Process):
             self.send_partition_status()
             self.print_communication()
 
-
-            self.send_zone_status()
-            self.print_communication()
-
-    def send_byte(self, byte):
-        GPIO.output(self._data, 1)
-        binary = "{0:08b}".format(byte)
-        for bit in binary:
-            # self.send_bit(bit)
-            GPIO.output(self._clock, 0)
-            sleep(0.000200)
-            GPIO.output(self._data, int(bit))
-            sleep(0.000020)
-            GPIO.output(self._clock, 1)
-            sleep(0.000020)
-            GPIO.output(self._data, 1)
-            sleep(0.000100)
-
-        self._communication.append({"sent": byte})
+            # self.send_zone_status()
+            # self.print_communication()
 
     def receive_bit(self):
         GPIO.output(self._clock, 0)
@@ -95,6 +86,8 @@ class KeypadHandler(Process):
         GPIO.output(self._data, 1)
         GPIO.output(self._clock, 1)
         sleep(0.000450)
+        
+        self._communication.append({"sent_b": 0, "received_b": bit})
         return bit
 
     def send_receive_byte(self, byte):
@@ -102,12 +95,9 @@ class KeypadHandler(Process):
         GPIO.output(self._data, 1)
         for bit in "{0:08b}".format(byte):
             GPIO.output(self._clock, 0)
-            # GPIO.setup(self._data, GPIO.IN)
             sleep(0.000200)
 
             response += str(GPIO.input(self._data))
-            # sleep(0.000100)
-            # GPIO.setup(self._data, GPIO.OUT)
             GPIO.output(self._data, int(bit))
             sleep(0.000020)
             GPIO.output(self._clock, 1)
@@ -121,56 +111,40 @@ class KeypadHandler(Process):
     def send_partition_status(self):
         print("PARTITION STATUS")
         led_status = self.get_led_status()
-        send = [0x05, led_status, 0x01, 0xC7, 0x91]
+        send = [PARTITION_STATUS, led_status, 0x01, UNKNOW_DATA, PARTITION_DISABLED]
 
-        self.send_byte(send[0])
-
-        sleep(0.0002)
-
-        response = self.receive_bit()
-
-        # read hack
-        keypad_respond = self.receive_bit()
-        sleep(0.002)
-
+        self.send_receive_byte(send[0])
+        sleep(0.001)
+        self.receive_bit()
+        sleep(0.001)
         self.send_receive_byte(send[1])
-        sleep(0.02)
+        sleep(0.001)
         self.send_receive_byte(send[2])
-        sleep(0.02)
+        sleep(0.001)
         self.send_receive_byte(send[3])
-        sleep(0.02)
+        sleep(0.001)
         self.send_receive_byte(send[4])
-
-        if keypad_respond:
-            return response
 
     def send_zone_status(self):
         print("ZONE STATUS")
         led_status = self.get_led_status()
-        send = [0x27, led_status, 0x01, 0xC7, 0x91, 0xFF, 0x6A]
+        send = [ZONE_STATUS, led_status, 0x01, UNKNOW_DATA, PARTITION_DISABLED, 0x00, 0x01]
 
-        self.send_byte(send[0])
-
-        sleep(0.0002)
-
-        response = self.receive_bit()
-
-        # read hack
-        keypad_respond = self.receive_bit()
-        sleep(0.002)
-
+        self.send_receive_byte(send[0])
+        sleep(0.001)
+        self.receive_bit()
+        sleep(0.001)
         self.send_receive_byte(send[1])
-        # sleep(0.0002)
+        sleep(0.001)
         self.send_receive_byte(send[2])
-        # sleep(0.0002)
+        sleep(0.001)
         self.send_receive_byte(send[3])
-        # sleep(0.0002)
+        sleep(0.001)
         self.send_receive_byte(send[4])
+        sleep(0.001)
         self.send_receive_byte(send[5])
+        sleep(0.001)
         self.send_receive_byte(send[6])
-
-        if keypad_respond:
-            return response
 
     def get_led_status(self):
         status = 0
@@ -184,13 +158,28 @@ class KeypadHandler(Process):
         return status
 
     def print_communication(self):
+        sent = ""
+        received = ""
         for message in self._communication:
-            if "sent" in message and "received" in message and message["received"] != 0xFF:
-                print("Sent => 0b{0:08b}=0x{0:02x} <= Received {1:08b}=0x{1:02x}".format(message["sent"], message["received"]))
+            if  "sent_b" in message and "received_b" in message:
+                sent += " {0:01b}".format(message["sent_b"])
+                received += " {0:01b}".format(message["received_b"])
+            elif "sent" in message and "received" in message:
+                sent += " {0:08b}".format(message["sent"])
+                received += " {0:08b}".format(message["received"])
+        
+        print("Sent:     {}".format(sent))
+        print("Received: {}".format(received))
+        self._communication = []
+
+    def print_columns(self):
+        for idx, message in enumerate(self._communication):
+            if idx in (1, 2):
+                print("Sent =>        {0:01b}      <= Received        {1:01b}".format(message["sent"], message["received"]))
+            elif "sent" in message and "received" in message and message["received"] != 0xFF:
+                print("Sent => {0:08b}=0x{0:02x} <= Received {1:08b}=0x{1:02x}".format(message["sent"], message["received"]))
             elif "sent" in message:
-                print("Sent => 0b{0:08b}=0x{0:02x}".format(message["sent"]))
-            # elif "received" in message:
-                # print("Sent => 0b{0:08b}=0x{0:02x} <= Received {1:08b}=0x{1:02x}".format(message["sent"], message["received"]))
+                print("Sent => {0:08b}=0x{0:02x}".format(message["sent"]))
 
         self._communication = []
 
