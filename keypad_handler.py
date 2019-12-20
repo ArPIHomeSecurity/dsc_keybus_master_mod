@@ -1,5 +1,6 @@
 # coding=utf8
 
+from datetime import datetime
 import logging
 from logging import basicConfig
 from multiprocessing import Process
@@ -17,9 +18,11 @@ UNKNOW_DATA = 0b10010001  # 0x91
 PARTITION_DISABLED = 0b11000111  # 0xC7
 
 # COMMANDS
+KEYBUS_QUERY     = 0x4C
 PARTITION_STATUS = 0x05
 ZONE_STATUS      = 0x27
 ZONE_LIGHTS      = 0x0A
+DATETIME_STATUS  = 0xA5
 
 
 def usleep(secs):
@@ -38,10 +41,10 @@ READY     = 0b00000001 # 0x01
 
 
 class KeypadHandler(Process):
-    _backlight = False
-    _armed = True
+    _backlight = True
+    _armed = False
     _ready = True
-    _error = True
+    _error = False
 
     def __init__(self, commands, responses):
         super(KeypadHandler, self).__init__()
@@ -70,7 +73,7 @@ class KeypadHandler(Process):
             print("Start communication...")
             message = ""
             try:
-                message = self._commands.get(timeout=2)
+                message = self._commands.get(timeout=3)
             except Empty:
                 pass
 
@@ -78,13 +81,26 @@ class KeypadHandler(Process):
                 break
 
             self.send_partition_status()
+            do_keybus_query = self._communication[4]["received"] == 0xFE
             self.print_communication()
+
+            if do_keybus_query:
+                self.send_keybus_query()
+                self.print_communication()
 
             self.send_zone_status()
+            do_keybus_query = self._communication[4]["received"] == 0xFE
             self.print_communication()
 
-            # self.send_zone_lights()
-            # self.print_communication()
+            if do_keybus_query:
+                self.send_keybus_query()
+                self.print_communication()
+
+            self.send_zone_lights()
+            self.print_communication()
+
+            self.send_datetime()
+            self.print_communication()
 
     def receive_bit(self):
         GPIO.output(self._clock, 0)
@@ -117,6 +133,10 @@ class KeypadHandler(Process):
         self._communication.append({"sent": byte, "received": int(response, 2)})
         return response
 
+    def send_keybus_query(self):
+        print("KEYBUS QUERY")
+        self.send_and_receive([KEYBUS_QUERY, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA])
+
     def send_partition_status(self):
         print("PARTITION STATUS")
         led_status = self.get_led_status()
@@ -125,12 +145,25 @@ class KeypadHandler(Process):
     def send_zone_status(self):
         print("ZONE STATUS")
         led_status = self.get_led_status()
-        self.send_and_receive(self.add_CRC([ZONE_STATUS, led_status, 0x01, UNKNOW_DATA, 0XFF, 0x00]))
+        self.send_and_receive(self.add_CRC([ZONE_STATUS, led_status, 0x01, UNKNOW_DATA, 0XC7, 0x02]))
+
+    def send_datetime(self):
+        timestamp = datetime.now()
+        print("DATETIME %s" % timestamp.isoformat())
+
+        b1 = (int((timestamp.year-2000)/10) << 4)
+        b1 |= (0x0F & ((timestamp.year-2000) % 10))
+        b2 = 0x3C & (timestamp.month << 2)
+        b2 |= (timestamp.day & 0b00011000) >> 3
+        b3 = (timestamp.day & 0b00000111) << 5
+        b3 |= timestamp.hour & 0x1F
+        b4 = timestamp.minute << 2
+        self.send_and_receive(self.add_CRC([DATETIME_STATUS, b1, b2, b3, b4, 0x00, 0x00]))
 
     def send_zone_lights(self):
         print("ZONE LIGHTS")
         led_status = self.get_led_status()
-        self.send_and_receive(self.add_CRC([ZONE_LIGHTS, led_status, 0x01, 0x65, 0x0, 0x0, 0x0, 0x0, 0x0]))
+        self.send_and_receive(self.add_CRC([ZONE_LIGHTS, led_status, 0x01, 0x65, 0x0, 0x0, 0x0, 0x0]))
 
     def send_and_receive(self, messages):
         self.send_receive_byte(messages.pop(0))
@@ -181,17 +214,6 @@ class KeypadHandler(Process):
                 print("!!! Unknown command !!!")
         except KeyError:
             pass
-
-        self._communication = []
-
-    def print_columns(self):
-        for idx, message in enumerate(self._communication):
-            if idx in (1, 2):
-                print("Sent =>        {0:01b}      <= Received        {1:01b}".format(message["sent"], message["received"]))
-            elif "sent" in message and "received" in message and message["received"] != 0xFF:
-                print("Sent => {0:08b}=0x{0:02x} <= Received {1:08b}=0x{1:02x}".format(message["sent"], message["received"]))
-            elif "sent" in message:
-                print("Sent => {0:08b}=0x{0:02x}".format(message["sent"]))
 
         self._communication = []
 
