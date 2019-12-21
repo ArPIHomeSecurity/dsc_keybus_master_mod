@@ -14,8 +14,6 @@ from time import sleep
 
 import RPi.GPIO as GPIO
 
-BYTE_GAP = 0.001
-
 # Magic numbers
 NULL         = 0x00
 PLACEHOLDER  = 0xAA
@@ -25,13 +23,6 @@ UNKNOWN_DATA  = 0b10010001  # 0x91
 PARTITION_DISABLED = 0b11000111  # 0xC7
 UNKNOWN_COMMAND = 0xFE
 VOID = 0xFF
-
-# COMMANDS
-KEYBUS_QUERY     = 0x4C
-PARTITION_STATUS = 0x05
-ZONE_STATUS      = 0x27
-ZONE_LIGHTS      = 0x0A
-DATETIME_STATUS  = 0xA5
 
 
 class Lights:
@@ -102,6 +93,8 @@ class Buttons:
 
 
 class Line:
+    BYTE_GAP = 0.001
+
     def __init__(self, clock, data):
         self._clock = clock
         self._data = data
@@ -140,8 +133,25 @@ class Line:
         self.conversation.append({"sent": byte, "received": int(response, 2)})
         return response
 
+    def send_and_receive(self, messages):
+        self.send_receive_byte(messages.pop(0))
+        sleep(Line.BYTE_GAP)
+        self.receive_bit()
+        sleep(Line.BYTE_GAP)
+
+        while messages:
+            self.send_receive_byte(messages.pop(0))
+            sleep(Line.BYTE_GAP)
+
 
 class KeypadHandler(Process):
+    # COMMANDS
+    KEYBUS_QUERY = 0x4C
+    PARTITION_STATUS = 0x05
+    ZONE_STATUS = 0x27
+    ZONE_LIGHTS = 0x0A
+    DATETIME_STATUS = 0xA5
+
     def __init__(self, commands, responses, line):
         super(KeypadHandler, self).__init__()
         self._logger = logging.getLogger("keybus")
@@ -178,7 +188,7 @@ class KeypadHandler(Process):
 
     def send_command(self, method):
         method()
-        do_keybus_query = self._line.conversation[4]["received"] == UNKNOWN_COMMAND
+        do_keybus_query = self._line.conversation[4]["received"] == self.UNKNOWN_COMMAND
 
         if self._line.conversation[2]["received"] != VOID:
             message = f"{Buttons.get_button(self._line.conversation[2]['received'])}"
@@ -190,33 +200,42 @@ class KeypadHandler(Process):
             self.send_keybus_query()
             self.print_communication()
 
-    def send_and_receive(self, messages):
-        self._line.send_receive_byte(messages.pop(0))
-        sleep(BYTE_GAP)
-        self._line.receive_bit()
-        sleep(BYTE_GAP)
-
-        while messages:
-            self._line.send_receive_byte(messages.pop(0))
-            sleep(BYTE_GAP)
-
     def send_keybus_query(self):
-        self._logger.info("KEYBUS QUERY 0x%0X" % KEYBUS_QUERY)
-        self.send_and_receive([KEYBUS_QUERY, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER, PLACEHOLDER])
+        self._logger.info("KEYBUS QUERY 0x%0X" % self.KEYBUS_QUERY)
+        self._line.send_and_receive([
+            self.KEYBUS_QUERY,
+            PLACEHOLDER,
+            PLACEHOLDER,
+            PLACEHOLDER,
+            PLACEHOLDER,
+            PLACEHOLDER,
+            PLACEHOLDER,
+            PLACEHOLDER,
+            PLACEHOLDER,
+            PLACEHOLDER,
+            PLACEHOLDER,
+            PLACEHOLDER
+        ])
 
     def send_partition_status(self):
-        self._logger.info("PARTITION STATUS 0x%0X" % PARTITION_STATUS)
+        self._logger.info("PARTITION STATUS 0x%0X" % self.PARTITION_STATUS)
         led_status = self._lights.get_lights()
-        self.send_and_receive([PARTITION_STATUS, led_status, 0x01, UNKNOWN_DATA, PARTITION_DISABLED])
+        self._line.send_and_receive([
+            self.PARTITION_STATUS,
+            led_status,
+            0x01,
+            UNKNOWN_DATA,
+            PARTITION_DISABLED
+        ])
 
     def send_zone_status(self):
-        self._logger.info("ZONE STATUS 0x%0X" % ZONE_STATUS)
+        self._logger.info("ZONE STATUS 0x%0X" % self.ZONE_STATUS)
         led_status = self._lights.get_lights()
-        self.send_and_receive(self.add_CRC([ZONE_STATUS, led_status, 0x01, UNKNOWN_DATA, 0XC7, 0x02]))
+        self._line.send_and_receive(self.add_CRC([self.ZONE_STATUS, led_status, 0x01, UNKNOWN_DATA, 0XC7, 0x02]))
 
     def send_datetime(self):
         timestamp = datetime.now()
-        self._logger.info("DATETIME 0x%0X => %s" % (DATETIME_STATUS, timestamp.isoformat()))
+        self._logger.info("DATETIME 0x%0X => %s" % (self.DATETIME_STATUS, timestamp.isoformat()))
 
         b1 = (int((timestamp.year-2000)/10) << 4)
         b1 |= (0x0F & ((timestamp.year-2000) % 10))
@@ -225,12 +244,12 @@ class KeypadHandler(Process):
         b3 = (timestamp.day & 0b00000111) << 5
         b3 |= timestamp.hour & 0x1F
         b4 = timestamp.minute << 2
-        self.send_and_receive(self.add_CRC([DATETIME_STATUS, b1, b2, b3, b4, NULL, NULL]))
+        self._line.send_and_receive(self.add_CRC([self.DATETIME_STATUS, b1, b2, b3, b4, NULL, NULL]))
 
     def send_zone_lights(self):
-        self._logger.info("ZONE LIGHTS 0x%0X" % ZONE_LIGHTS)
+        self._logger.info("ZONE LIGHTS 0x%0X" % self.ZONE_LIGHTS)
         led_status = self._lights.get_lights()
-        self.send_and_receive(self.add_CRC([ZONE_LIGHTS, led_status, 0x01, 0x65, NULL, NULL, NULL, NULL]))
+        self._line.send_and_receive(self.add_CRC([self.ZONE_LIGHTS, led_status, 0x01, 0x65, NULL, NULL, NULL, NULL]))
 
     def add_CRC(self, messages):
         total = 0
