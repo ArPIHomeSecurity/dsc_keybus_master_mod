@@ -10,9 +10,15 @@ from logging import basicConfig
 from multiprocessing import Process
 from multiprocessing import Queue
 from multiprocessing.queues import Empty
-from time import sleep
+from time import sleep, time
 
 import RPi.GPIO as GPIO
+
+# accecss codes
+codes = [
+    "1234",
+    "1111"
+]
 
 # Magic numbers
 NULL         = 0x00
@@ -42,7 +48,7 @@ class Lights:
         self.error = False
         self.bypass = False
         self.memory = False
-        self.armed = True
+        self.armed = False
         self.ready = True
 
     def get_lights(self):
@@ -145,12 +151,13 @@ class Line:
 
 
 class KeypadHandler(Process):
-    # COMMANDS
+    # DSC COMMANDS
     KEYBUS_QUERY = 0x4C
     PARTITION_STATUS = 0x05
     ZONE_STATUS = 0x27
     ZONE_LIGHTS = 0x0A
     DATETIME_STATUS = 0xA5
+    BEEP = 0x64
 
     def __init__(self, commands, responses, line):
         super(KeypadHandler, self).__init__()
@@ -160,6 +167,7 @@ class KeypadHandler(Process):
         self._lights = Lights()
         self._keypresses = []
         self._line = line
+        self._pushed = False
 
     def run(self):
         try:
@@ -167,30 +175,47 @@ class KeypadHandler(Process):
         except KeyboardInterrupt:
             pass
         except Exception:
-            logging.exception("Communication failed!")
+            self._logger.exception("Communication failed!")
+
+        self._logger.info("Communication ended")
 
     def communicate(self):
+        self.send_command(self.send_partition_status)
+        self.send_command(self.send_zone_status)
+        self.send_command(self.send_zone_lights)
+        self.send_command(self.send_datetime)
         while True:
             try:
-                message = self._commands.get(timeout=3)
+                self._logger.debug("Wait for command...")
+                message = self._commands.get(timeout=0.5)
                 self._logger.info("Command: %s", message)
 
-                if message == "SHUTDOWN":
+                if message["type"] == "disarmed":
+                    self._lights.armed = False
+                    self.send_command(self.send_beep)
+                elif message == "SHUTDOWN":
                     break
             except Empty:
                 pass
 
             self._logger.info("Start communication...")
             self.send_command(self.send_partition_status)
-            self.send_command(self.send_zone_status)
-            self.send_command(self.send_zone_lights)
-            self.send_command(self.send_datetime)
+
+            if time() % 240 == 0:
+                self.send_command(self.send_zone_status)
+                self.send_command(self.send_zone_lights)
+                self.send_command(self.send_datetime)
 
     def send_command(self, method):
         method()
-        do_keybus_query = self._line.conversation[4]["received"] == self.UNKNOWN_COMMAND
+        do_keybus_query = False
+        try:
+            do_keybus_query = self._line.conversation[4]["received"] == UNKNOWN_COMMAND
+        except IndexError:
+            pass
 
         if self._line.conversation[2]["received"] != VOID:
+            self._pushed = True
             message = f"{Buttons.get_button(self._line.conversation[2]['received'])}"
             self._logger.debug("Message: %s", message)
             self._responses.put(message)
@@ -199,6 +224,13 @@ class KeypadHandler(Process):
         if do_keybus_query:
             self.send_keybus_query()
             self.print_communication()
+
+    def send_beep(self):
+        self._logger.info("BEEP 0x%0X" % self.BEEP)
+        self._line.send_and_receive(self.add_CRC([
+            self.BEEP,
+            0x0C
+        ]))
 
     def send_keybus_query(self):
         self._logger.info("KEYBUS QUERY 0x%0X" % self.KEYBUS_QUERY)
@@ -218,7 +250,7 @@ class KeypadHandler(Process):
         ])
 
     def send_partition_status(self):
-        self._logger.info("PARTITION STATUS 0x%0X" % self.PARTITION_STATUS)
+        self._logger.debug("PARTITION STATUS 0x%0X" % self.PARTITION_STATUS)
         led_status = self._lights.get_lights()
         self._line.send_and_receive([
             self.PARTITION_STATUS,
@@ -229,13 +261,13 @@ class KeypadHandler(Process):
         ])
 
     def send_zone_status(self):
-        self._logger.info("ZONE STATUS 0x%0X" % self.ZONE_STATUS)
+        self._logger.debug("ZONE STATUS 0x%0X" % self.ZONE_STATUS)
         led_status = self._lights.get_lights()
         self._line.send_and_receive(self.add_CRC([self.ZONE_STATUS, led_status, 0x01, UNKNOWN_DATA, 0XC7, 0x02]))
 
     def send_datetime(self):
         timestamp = datetime.now()
-        self._logger.info("DATETIME 0x%0X => %s" % (self.DATETIME_STATUS, timestamp.isoformat()))
+        self._logger.debug("DATETIME 0x%0X => %s" % (self.DATETIME_STATUS, timestamp.isoformat()))
 
         b1 = (int((timestamp.year-2000)/10) << 4)
         b1 |= (0x0F & ((timestamp.year-2000) % 10))
@@ -247,7 +279,7 @@ class KeypadHandler(Process):
         self._line.send_and_receive(self.add_CRC([self.DATETIME_STATUS, b1, b2, b3, b4, NULL, NULL]))
 
     def send_zone_lights(self):
-        self._logger.info("ZONE LIGHTS 0x%0X" % self.ZONE_LIGHTS)
+        self._logger.debug("ZONE LIGHTS 0x%0X" % self.ZONE_LIGHTS)
         led_status = self._lights.get_lights()
         self._line.send_and_receive(self.add_CRC([self.ZONE_LIGHTS, led_status, 0x01, 0x65, NULL, NULL, NULL, NULL]))
 
@@ -270,12 +302,12 @@ class KeypadHandler(Process):
                 sent += " {0:08b}".format(message["sent"])
                 received += " {0:08b}".format(message["received"])
 
-        self._logger.info("Sent:     {}".format(sent))
-        self._logger.info("Received: {}".format(received))
+        self._logger.debug("Sent:     {}".format(sent))
+        self._logger.debug("Received: {}".format(received))
         try:
             if self._line.conversation[4]["received"] == 0xFE:
-                self._logger.info("!!! Unknown command !!!")
-        except KeyError:
+                self._logger.warning("!!! Unknown command !!!")
+        except (KeyError, IndexError):
             pass
 
         self._line.conversation = []
@@ -288,11 +320,23 @@ def main():
     keypad_handler = KeypadHandler(input, output, Line(clock=5, data=0))
     keypad_handler.start()
 
+    buttons = ""
     while True:
         try:
             try:
                 message = output.get(timeout=1)
-                logger.info("Response: %s", message)
+                logger.info("Pushed: %s", message)
+                if message in ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9"):
+                    buttons += message
+
+                if buttons in codes:
+                    input.put({"type": "disarmed"})
+                    logger.info("Disarmed")
+                    buttons = ""
+                elif len(buttons) == 4:
+                    input.put({"type": "invalid_code"})
+                    logger.info("Invalid code")
+                    buttons = ""
             except Empty:
                 pass
 
