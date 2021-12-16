@@ -4,7 +4,7 @@
  Author      : Gábor Kovács
  Version     :
  Copyright   :
- Description : Hello World in C, Ansi-style
+ Description : DSC keybus protocol - master side Kernel module
  ============================================================================
  */
 
